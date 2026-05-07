@@ -11,7 +11,7 @@ import logging
 import requests
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
+import pandas_ta_classic as ta
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 

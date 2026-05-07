@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # External libs
 import ccxt
-import pandas_ta as ta
+import pandas_ta_classic as ta
 from discord_webhook import DiscordWebhook
 
 # Configure logging

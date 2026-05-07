@@ -1,0 +1,27 @@
+discord:
+  webhook_url: "${DISCORD_WEBHOOK}"  # Set as env var
+  signals_channel: "signals"
+  high_conviction_channel: "high-conviction"
+
+pairs:
+  - BTCUSDT
+  - ETHUSDT
+  - SOLUSDT
+
+timeframes:
+  - 15m
+  - 1h
+  - 4h
+
+risk:
+  max_risk_pct: 1.5
+  min_rr: 2.0
+  max_correlated_trades: 3
+  weekly_dd_limit: 10.0
+  daily_loss_limit: 4.0
+  consecutive_losses_limit: 3
+
+apis:
+  binance: true
+  coingecko: true
+  glassnode: "demo"  # free tier

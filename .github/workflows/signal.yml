@@ -1,0 +1,24 @@
+name: Crypto Signal Engine
+on:
+  schedule:
+    - cron: '0 4 * * *'  # Every 4 hours
+    - cron: '15 9-17 * * 1-5'  # 15min market hours
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+jobs:
+  signals:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - run: pip install -r requirements.txt
+    - run: python src/main.py
+      env:
+        DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+    - name: Run backtest on push
+      if: github.event_name == 'push'
+      run: python src/backtestvalidator.py --pairs BTCUSDT

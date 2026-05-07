@@ -1,253 +1,189 @@
 #!/usr/bin/env python3
 """
-Super Joint Crypto Signal Engine - Bybit Edition
-Production-ready with geo-restriction bypass
+Super Joint Blueprint - Production Crypto Signal Engine
+Enhanced with Multi-Exchange Failover and Source Tracking
 """
 
 import sys
 import os
 import argparse
 import logging
-import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import pandas as pd
-import numpy as np
-
-# External libs
 import ccxt
-try:
-    from discord_webhook import DiscordWebhook
-    DISCORD_AVAILABLE = True
-except ImportError:
-    DISCORD_AVAILABLE = False
-    print("Install discord-webhook for Discord alerts")
+import pandas_ta_classic as ta
+from discord_webhook import DiscordWebhook
 
-# Logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        logging.FileHandler('signals.log'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 class SuperJointEngine:
-    def __init__(self, dry_run: bool = True):
-        self.dry_run = dry_run
-        self.balance = 10000
-        self.max_risk_pct = 0.015
-        self.min_rr = 2.0
+    def __init__(self, config: Dict = None):
+        self.config = config or {
+            'pairs': ['BTC/USDT', 'ETH/USDT'],
+            'timeframes': ['1h'],
+            'risk': {'max_risk_pct': 1.5, 'min_rr': 2.0}
+        }
         
-        # Use Bybit - no geo-restrictions
-        self.exchange = ccxt.bybit({
-            'enableRateLimit': True,
-            'options': {'defaultType': 'swap'}  # USDT perpetuals
-        })
+        self.max_risk_pct = self.config['risk']['max_risk_pct'] / 100
+        self.min_rr = self.config['risk']['min_rr']
         
-        # Test connection
-        try:
-            self.exchange.load_markets()
-            logger.info("✅ Connected to Bybit")
-        except Exception as e:
-            logger.error(f"Exchange error: {e}")
+        # Initialize Exchange Pool for Failover
+        self.exchange_pool = [
+            {'name': 'Binance', 'client': ccxt.binance({'enableRateLimit': True})},
+            {'name': 'Bybit', 'client': ccxt.bybit({'enableRateLimit': True})},
+            {'name': 'Kraken', 'client': ccxt.kraken({'enableRateLimit': True})}
+        ]
     
-    def fetch_data(self, symbol: str, timeframe: str = '1h', limit: int = 300) -> pd.DataFrame:
-        """Robust data fetch with retries."""
-        for attempt in range(3):
+    def fetch_data(self, symbol: str, timeframe: str = '1h', limit: int = 300) -> Tuple[pd.DataFrame, Optional[str]]:
+        """
+        Scans through multiple exchanges until data is successfully retrieved.
+        Returns (DataFrame, Exchange_Name)
+        """
+        for exchange in self.exchange_pool:
             try:
-                ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+                name = exchange['name']
+                client = exchange['client']
+                
+                logger.info(f"Attempting to fetch {symbol} from {name}...")
+                ohlcv = client.fetch_ohlcv(symbol, timeframe, limit=limit)
+                
+                if not ohlcv or len(ohlcv) < limit * 0.8:
+                    logger.warning(f"Insufficient data from {name}, trying next...")
+                    continue
+
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
                 df.set_index('timestamp', inplace=True)
-                logger.info(f"✅ Fetched {len(df)} candles: {symbol}")
-                return df
+                
+                logger.info(f"Successfully retrieved data from {name}")
+                return df, name
+
             except Exception as e:
-                logger.warning(f"Fetch attempt {attempt+1} failed: {e}")
-                time.sleep(2 ** attempt)
+                logger.error(f"Exchange {exchange['name']} failed for {symbol}: {str(e)}")
+                continue
         
-        logger.error(f"❌ Failed to fetch {symbol}")
-        return pd.DataFrame()
+        logger.critical(f"All exchanges failed for {symbol}")
+        return pd.DataFrame(), None
     
     def compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Blueprint indicators."""
-        if len(df) < 50:
-            return df
-            
-        try:
-            # Core trend
-            df['ema_21'] = ta.ema(df['close'], 21)
-            df['ema_50'] = ta.ema(df['close'], 50)
-            df['ema_200'] = ta.ema(df['close'], 200)
-            df['rsi'] = ta.rsi(df['close'], 14)
-            df['atr'] = ta.atr(df['high'], df['low'], df['close'], 14)
-            
-            # Bollinger Bands + Keltner
-            bb = ta.bbands(df['close'], length=20)
-            df['bb_upper'] = bb['BBU_20_2.0']
-            df['bb_lower'] = bb['BBL_20_2.0']
-            kc = ta.kc(df['high'], df['low'], df['close'], 20)
-            df['kc_upper'] = kc['KCUe_20_2.0']
-            df['kc_lower'] = kc['KCLb_20_2.0']
-            
-            # Volume + momentum
-            df['obv'] = ta.obv(df['close'], df['volume'])
-            df['cci'] = ta.cci(df['high'], df['low'], df['close'])
-            macd = ta.macd(df['close'])
-            df['macd_hist'] = macd['MACDh_12_26_9']
-            
-            return df.dropna()
-        except Exception as e:
-            logger.error(f"Indicator error: {e}")
-            return df
-    
-    def generate_signals(self, df: pd.DataFrame) -> List[Dict]:
-        """8 Strategy Engines (simplified production versions)."""
-        signals = []
+        if df.empty: return df
+        
+        df['ema_8'] = ta.ema(df['close'], 8)
+        df['ema_21'] = ta.ema(df['close'], 21)
+        df['ema_50'] = ta.ema(df['close'], 50)
+        df['ema_200'] = ta.ema(df['close'], 200)
+        df['rsi'] = ta.rsi(df['close'], 14)
+        
+        macd = ta.macd(df['close'])
+        df['macd_hist'] = macd['MACDh_12_26_9']
+        df['atr'] = ta.atr(df['high'], df['low'], df['close'], 14)
+        
+        bb = ta.bbands(df['close'], length=20)
+        df['bb_upper'] = bb['BBU_20_2.0']
+        df['bb_lower'] = bb['BBL_20_2.0']
+        
+        kc = ta.kc(df['high'], df['low'], df['close'])
+        df['kc_upper'] = kc['KCUe_20_2.0']
+        df['kc_lower'] = kc['KCLb_20_2.0']
+        
+        return df.dropna()
+
+    # --- Strategy Logic (Condensed) ---
+    def trend_rider_signal(self, df: pd.DataFrame) -> Optional[Dict]:
         latest = df.iloc[-1]
-        
-        # 1. TREND RIDER (Strategy A)
-        if (latest['close'] > latest['ema_50'] > latest['ema_200'] and
-            50 < latest['rsi'] < 70 and latest['macd_hist'] > 0):
-            signals.append({
-                'strategy': 'TrendRider',
-                'direction': 'LONG',
-                'confidence': 0.8,
-                'entry': latest['close'],
-                'stop': latest['ema_21'] - latest['atr'],
-                'target': latest['close'] + 4 * latest['atr']
-            })
-        
-        # 2. SQUEEZE ROCKET (Strategy B)
-        squeeze_period = ((df['bb_upper'] < df['kc_upper']) & 
-                         (df['bb_lower'] > df['kc_lower'])).sum()
-        if squeeze_period >= 10 and latest['close'] > latest['bb_upper']:
-            signals.append({
-                'strategy': 'SqueezeRocket',
-                'direction': 'LONG',
-                'confidence': 0.85,
-                'entry': latest['close'],
-                'stop': latest['bb_lower'],
-                'target': latest['close'] + 2 * latest['atr']
-            })
-        
-        # 3. SMC BOS (Strategy D)
-        swing_high = df['high'].rolling(10).max().iloc[-2]
-        if latest['high'] > swing_high and latest['rsi'] > 50:
-            signals.append({
-                'strategy': 'SMC',
-                'direction': 'LONG',
-                'confidence': 0.9,
-                'entry': latest['close'],
-                'stop': df['low'].rolling(10).min().iloc[-1],
-                'target': latest['close'] + 3 * latest['atr']
-            })
-        
-        return signals
-    
-    def score_confluence(self, signals: List[Dict], df: pd.DataFrame) -> float:
-        """Consensus engine: 7/10 minimum."""
-        if not signals:
-            return 0.0
-            
+        if (latest['close'] > latest['ema_50'] > latest['ema_200'] and 50 < latest['rsi'] < 70):
+            return {
+                'direction': 'LONG', 'confidence': 0.8, 'strategy': 'TrendRider',
+                'entry': latest['close'], 'stop': latest['ema_21'] - latest['atr'],
+                'target': latest['close'] + (latest['atr'] * 3)
+            }
+        return None
+
+    def squeeze_rocket_signal(self, df: pd.DataFrame) -> Optional[Dict]:
+        squeeze = ((df['bb_upper'] < df['kc_upper']) & (df['bb_lower'] > df['kc_lower'])).tail(10).sum()
         latest = df.iloc[-1]
-        score = 0
-        
-        # Trend alignment (2pts)
-        score += 2 if latest['close'] > latest['ema_50'] else 0
-        # Momentum (1.5pts)
-        score += 1.5 if 40 < latest['rsi'] < 80 else 0
-        # Volume (1pt)
-        score += 1 if latest['volume'] > df['volume'].mean() else 0
-        # Strategy count (3pts)
-        score += min(3, len(signals))
-        # SMC bonus (1pt)
-        score += 1 if any(s['strategy'] == 'SMC' for s in signals) else 0
-        
-        return min(score, 10.0)
-    
-    def validate_trade(self, signal: Dict) -> bool:
-        """Blueprint risk rules."""
-        risk_dist = abs(signal['entry'] - signal['stop']) / signal['entry']
-        rr = abs(signal['target'] - signal['entry']) / abs(signal['entry'] - signal['stop'])
+        if squeeze >= 5 and latest['close'] > latest['bb_upper']:
+            return {
+                'direction': 'LONG', 'confidence': 0.85, 'strategy': 'SqueezeRocket',
+                'entry': latest['close'], 'stop': latest['bb_lower'],
+                'target': latest['close'] + (latest['atr'] * 2)
+            }
+        return None
+
+    def validate_risk(self, signal: Dict) -> bool:
+        entry, stop, target = signal['entry'], signal['stop'], signal['target']
+        risk_dist = abs(entry - stop) / entry
+        rr = abs(target - entry) / abs(entry - stop)
         return rr >= self.min_rr and risk_dist <= self.max_risk_pct
-    
-    def format_embed(self, signal: Dict, score: float) -> str:
-        """Rich Discord embed."""
+
+    def format_signal(self, signal: Dict, exchange_name: str) -> str:
         rr = abs(signal['target'] - signal['entry']) / abs(signal['entry'] - signal['stop'])
         return f"""
-🔔 **{signal['strategy']} SIGNAL**
-Pair: `BTCUSDT` | TF: `1H`
+🔔 **{signal["pair"]} {signal["direction"]} 1H**
+Entry: `{signal["entry"]:.2f}`
+SL: `{signal["stop"]:.2f}`
+TP: `{signal["target"]:.2f}`
 
-💰 **Entry**: `{signal["entry"]:.4f}`
-🛑 **Stop**: `{signal["stop"]:.4f}`
-🎯 **Target**: `{signal["target"]:.4f}`
-
-⚖️ **R:R**: `1:{rr:.1f}`
-📊 **Score**: `{score:.1f}/10`
-⭐ **Confidence**: `{signal["confidence"]:.0%}`
+⚖️ **R:R 1:{rr:.1f}**
+🏛️ **Source: {exchange_name}**
+⚡ **Strategy: {signal["strategy"]}**
         """
-    
+
     def send_discord(self, embed: str):
-        """Discord alert."""
-        if not self.dry_run and DISCORD_AVAILABLE:
-            webhook_url = os.getenv('DISCORD_WEBHOOK')
-            if webhook_url:
-                try:
-                    DiscordWebhook(url=webhook_url, content=embed).execute()
-                    logger.info("✅ Discord signal sent")
-                except Exception as e:
-                    logger.error(f"Discord error: {e}")
-            else:
-                logger.warning("No DISCORD_WEBHOOK - dry run")
+        webhook = os.getenv('DISCORD_WEBHOOK')
+        if webhook:
+            DiscordWebhook(url=webhook, content=embed).execute()
+            logger.info("✅ Signal sent to Discord")
         else:
-            print("🧪 DRY RUN:\n", embed)
-    
-    def process_pair(self, symbol: str):
-        """Process single pair."""
-        logger.info(f"🔄 Analyzing {symbol}")
-        
-        df = self.fetch_data(symbol)
-        if df.empty:
-            return
-        
-        df = self.compute_indicators(df)
-        if len(df) < 50:
-            logger.warning("Insufficient data")
-            return
-        
-        # Generate signals
-        signals = self.generate_signals(df)
-        score = self.score_confluence(signals, df)
-        
-        logger.info(f"  → {len(signals)} signals | Score: {score:.1f}/10")
-        
-        if score >= 7.0 and signals:
-            best_signal = max(signals, key=lambda x: x['confidence'])
-            
-            if self.validate_trade(best_signal):
-                embed = self.format_embed(best_signal, score)
-                self.send_discord(embed)
-                logger.info(f"✅ {best_signal['strategy']} signal VALIDATED")
-            else:
-                logger.info("❌ Risk rules rejected")
-    
-    def run(self, pairs: List[str] = None):
-        """Main execution."""
-        pairs = pairs or ['BTC/USDT', 'ETH/USDT', 'SOL/USDT']
-        
-        logger.info("🚀 Super Joint Engine v2.0 - Bybit Live")
-        logger.info(f"Mode: {'DRY-RUN' if self.dry_run else 'LIVE'}")
+            print("\n--- SIGNAL (DRY RUN) ---\n", embed)
+
+    def run(self, pairs: List[str] = None, dry_run: bool = True):
+        pairs = pairs or self.config['pairs']
+        logger.info(f"🚀 Engine Started. Failover Order: Binance -> Bybit -> Kraken")
         
         for pair in pairs:
-            self.process_pair(pair)
-        
-        logger.info("✅ Analysis complete")
+            # Multi-exchange scan
+            df, source_name = self.fetch_data(pair)
+            
+            if df.empty or not source_name:
+                continue
+                
+            df = self.compute_indicators(df)
+            
+            strategies = [
+                self.trend_rider_signal(df),
+                self.squeeze_rocket_signal(df)
+            ]
+            signals = [s for s in strategies if s]
+            
+            if signals:
+                best_signal = max(signals, key=lambda x: x['confidence'])
+                best_signal['pair'] = pair
+                
+                if self.validate_risk(best_signal):
+                    embed = self.format_signal(best_signal, source_name)
+                    if not dry_run:
+                        self.send_discord(embed)
+                    else:
+                        print(embed)
 
 def main():
-    parser = argparse.ArgumentParser(description="Super Joint Crypto Signals")
-    parser.add_argument('--pairs', nargs='*', default=None, 
-                       help="Pairs (default: BTC,ETH,SOL)")
-    parser.add_argument('--live', action='store_true', 
-                       help="Send live Discord (requires webhook)")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--pairs', nargs='*', default=['BTC/USDT', 'ETH/USDT'])
+    parser.add_argument('--live', action='store_true', help="Send to Discord (default is dry-run)")
     args = parser.parse_args()
     
-    engine = SuperJointEngine(dry_run=not args.live)
-    engine.run(args.pairs)
+    engine = SuperJointEngine()
+    engine.run(args.pairs, dry_run=not args.live)
 
 if __name__ == "__main__":
     main()

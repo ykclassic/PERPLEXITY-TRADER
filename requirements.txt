@@ -1,12 +1,12 @@
 ccxt
-pandas==2.2.2
+pandas
 pandas-ta-classic
-TA-Lib==0.4.28
-numpy==1.26.4
-pyyaml==6.0.1
-discord-webhook==1.3.0
-requests==2.31.0
-matplotlib==3.8.4
-plotly==5.22.0
-python-dotenv==1.0.0
-vectorbt==0.26.2  # for backtesting
+TA-Lib
+numpy
+pyyaml
+discord-webhook
+requests
+matplotlib
+plotly
+python-dotenv
+vectorbt  # for backtesting

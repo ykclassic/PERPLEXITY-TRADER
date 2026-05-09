@@ -7,6 +7,12 @@ pairs:
   - BTCUSDT
   - ETHUSDT
   - SOLUSDT
+  - BNBUSDT
+  - ADAUSDT
+  - XRPUSDT
+  - MATICUSDT
+  - LINKUSDT
+  - TONUSDT
 
 timeframes:
   - 15m

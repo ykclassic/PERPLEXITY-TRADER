@@ -269,6 +269,9 @@ class SuperJointEngine:
             ('bitcoin', 'BTC'),
             ('ethereum', 'ETH'), 
             ('solana', 'SOL')
+            ('binancecoin', 'BNB'),
+            ('ripple', 'XRP'), 
+            ('chainlink', 'LINK')
         ]
         
         for coin_id, name in coins:
